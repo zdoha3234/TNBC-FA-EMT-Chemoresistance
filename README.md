@@ -16,11 +16,25 @@ This repository contains the complete analytical pipeline for the manuscript:
 
 All data used in this study are publicly available:
 
-| Dataset | Accession | Description |
-|---------|-----------|-------------|
-| scRNA-seq atlas | [GSE176078](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE176078) | Wu et al. 2021 human breast cancer atlas |
-| Bulk cohort 1 | [GSE25066](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE25066) | NAC-treated TNBC (n=170) |
-| Bulk cohort 2 | [GSE58812](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE58812) | TNBC subtype cohort (n=107) |
+### Single-Cell RNA-seq Data
+
+| Dataset | Accession | Sensitive (S) | Resistant (R) | Description |
+|---------|-----------|---------------|---------------|-------------|
+| scRNA-seq atlas | [GSE176078](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE176078) | 3 (Chemo_non_TNBC) | 2 (Chemo_TNBC) | Wu et al. 2021 human breast cancer atlas — NAC-treated patients only |
+
+> **Classification:** Chemo_non_TNBC (*n* = 3) = chemotherapy-sensitive (S);  
+> Chemo_TNBC (*n* = 2) = chemotherapy-resistant (R)
+
+### Bulk Transcriptomic Validation Cohorts
+
+| Dataset | Accession | Total | Sensitive (S) | Resistant (R) | Description |
+|---------|-----------|-------|---------------|---------------|-------------|
+| GSE25066 | [GSE25066](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE25066) | 170 | 57 | 113 | NAC-treated TNBC — Hatzis et al. 2011 |
+| GSE58812 | [GSE58812](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE58812) | 107 | 76 | 31 | TNBC subtype cohort — Lehmann et al. 2016 |
+| **Total** | | **277** | **133** | **144** | |
+
+> **Classification:** Sensitive (S) = pathological complete response (pCR);  
+> Resistant (R) = residual disease (RD) |
 
 ## Software Requirements
 
