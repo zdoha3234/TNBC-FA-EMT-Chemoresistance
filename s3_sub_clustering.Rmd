@@ -1,0 +1,325 @@
+---
+title: "s2-Chemo"
+author: "Zinab Doha"
+date: "01/01/20265"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center', out.width = "90%", fig.asp = 0.52)
+```
+
+## Students 2: Differential Expression – Cancer Epithelial cells
+
+## Analysis design
+
+Students 2 (Differential Expression – Cancer Epithelial cells):
+
+FindMarkers(Chemo_TNBC vs Chemo_non_TNBC) within assigned celltype_major
+
+Volcano plot
+
+Top/Bottom gene sets (Top=up in TNBC; Bottom=up in non-TNBC)
+
+DotPlot (top DE genes)
+
+GO dotplot + cnetplot + heatplot (if packages installed)
+
+Saved CSV: StudentX_<Celltype>_FindMarkers.csv
+
+
+
+## Load libraries
+```{r}
+
+
+#BiocManager::install(c("clusterProfiler","org.Hs.eg.db","enrichplot","AnnotationDbi"))
+
+library(Seurat)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(clusterProfiler)
+library(enrichplot)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+
+```
+
+# Load data
+
+```{r}
+
+wu_chemo <- readRDS("wu_chemo.rds")
+```
+
+## Set seed
+
+```{r}
+set.seed(4)
+```
+
+# subset Cancer Epithelial
+```{r}
+cells_use <- rownames(wu_chemo@meta.data)[
+  wu_chemo$celltype_major == "Cancer Epithelial"
+]
+
+subset_ct <- subset(wu_chemo, cells = cells_use)
+Idents(subset_ct) <- "chemo_group"
+```
+
+##Preprocess & cluster cancer epithelial cells
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+
+set.seed(4)
+
+# Make sure RNA assay is active
+#DefaultAssay(subset_ct) <- "RNA"
+
+# Standard preprocessing
+#subset_ct <- NormalizeData(subset_ct, verbose = FALSE)
+subset_ct <- FindVariableFeatures(subset_ct, nfeatures = 3000, verbose = FALSE)
+#subset_ct <- ScaleData(subset_ct, verbose = FALSE)
+
+# Dimensional reduction
+subset_ct <- RunPCA(subset_ct, npcs = 40, verbose = FALSE)
+
+# Neighbors + clustering
+subset_ct <- FindNeighbors(subset_ct, dims = 1:25)
+subset_ct <- FindClusters(subset_ct, resolution = 0.09)
+
+# UMAP
+subset_ct <- RunUMAP(subset_ct, dims = 1:25)
+
+# Check clusters
+DimPlot(subset_ct, label = TRUE) +
+  ggtitle("Cancer epithelial sub-clusters")
+
+```
+
+
+##Define epithelial functional marker programs
+These are functional cancer epithelial programs, not lineage:
+```{r}
+lin_markers <- c(
+ "MKI67", "TOP2A", "HMGB2", "UBE2C", "CENPF", "CCNB1",
+ 
+ "FASN", "ACACA", "SCD", "FABP5", "ACLY", "ELOVL6",
+ 
+  "VIM", "ZEB1", "ZEB2", "SNAI1", "FN1",
+ 
+ "EPCAM", "KRT8", "KRT18", "KRT19",
+ 
+   "KRT5", "KRT14","MYH11", "COL17A1", "ITGA6"
+ 
+)
+
+
+# Make sure identities are clusters
+Idents(subset_ct) <- "seurat_clusters"
+
+DotPlot(
+   subset_ct,
+   features = lin_markers,cols = 'RdYlBu')+
+   theme_bw()+
+   coord_flip()
+```
+
+
+```{r}
+# Convert list to flat character vector
+epi_markers_flat <- c(
+  # Proliferative
+  "MKI67", "TOP2A", "HMGB2", "UBE2C", "CENPF", "CCNB1",
+  
+  # Fatty Acid Metabolic
+  "FASN", "ACACA", "SCD", "FABP5", "ACLY", "ELOVL6",
+  
+  # EMT
+  "VIM", "ZEB1", "ZEB2", "SNAI1", "FN1",
+  
+  # Luminal
+  "EPCAM", "KRT8", "KRT18", "KRT19", "MUC1", "XBP1"
+)
+```
+
+```{r}
+# ── STEP 1: check what identities exist in subset_ct ──────
+print(levels(Idents(subset_ct)))
+print(head(subset_ct@meta.data))  # see all available columns
+```
+
+
+##DotPlot to annotate epithelial clusters
+This is the key step for manual annotation.
+High MKI67/TOP2A → Proliferative epithelial
+
+High FASN/ACACA → Fatty-acid metabolic epithelial
+
+High CD274/IDO1 → Immune-suppressive epithelial
+
+High VIM/ZEB1 → EMT-like epithelial
+
+```{r}
+# Make sure PlotIdent is set correctly first
+Idents(subset_ct) <- "seurat_clusters"
+
+# Then plot
+p_epi <- DotPlot(
+  subset_ct,
+  features = epi_markers_flat,
+  cols     = "RdYlBu",
+  group.by = "seurat_clusters",
+  dot.scale = 6,
+  scale    = FALSE
+) +
+  RotatedAxis() +
+  ggtitle("Cancer Epithelial — marker programs by subtype") +
+  theme(
+    axis.text.x     = element_text(size = 8),
+    axis.text.y     = element_text(size = 9),
+    plot.title      = element_text(face = "bold", size = 11),
+    legend.position = "right"
+  )
+
+# Add group labels on top
+epi_groups <- list(
+  "Proliferative" = 6,
+  "EMT"           = 5,
+  "FA"     = 6,
+  "Luminal"       = 4
+)
+
+p_epi
+
+p_epi <- add_group_labels(p_epi, epi_groups, angle = 35)
+
+ggsave("plots/DotPlot_Epithelial.pdf",
+       plot = p_epi, width = 15, height = 6, dpi = 300)
+
+```
+
+
+##Assign epithelial subtype names to clusters
+
+
+ 
+  
+```{r}
+epi_cluster_to_subtype <- c(
+   "0" = "FA_Luminal",
+  "1" = "FA_EMT",
+  "2" = "Luminal_2",
+  "3" = "Luminal_1")
+
+subset_ct$PlotIdent <- unname(
+  epi_cluster_to_subtype[
+    as.character(Idents(subset_ct))
+  ]
+)
+
+subset_ct$PlotIdent <- factor(
+  subset_ct$PlotIdent,
+  levels = c(
+    "0" = "FA_Luminal",
+  "1" = "FA_EMT",
+  "2" = "Luminal_2",
+  "3" = "Luminal_1"
+  )
+)
+
+
+
+
+```
+
+##UMAP visualizations
+🔹 By epithelial subtype
+```{r}
+DimPlot(
+  subset_ct,
+  group.by = "PlotIdent",
+  label = TRUE,
+  repel = TRUE
+) +
+  ggtitle("Cancer epithelial subtypes")
+```
+
+##🔹 By chemo group (Sensitive vs Resistant)
+```{r}
+DimPlot(
+  subset_ct,
+  group.by = "chemo_group",
+  cols = c(
+    "Chemo_non_TNBC" = "#00BFC4",
+    "Chemo_TNBC" = "#F8766D"
+  )
+) +
+  ggtitle("Cancer epithelial cells by chemo response")
+```
+
+🔹 Split UMAP: subtype × chemo group
+```{r}
+DimPlot(
+  subset_ct,
+  group.by = "PlotIdent",
+  split.by = "chemo_group",
+  pt.size = 0.3
+) +
+  ggtitle("Epithelial subtypes split by chemo response")
+```
+
+##6️⃣ Composition of epithelial subtypes by chemo group
+🔹 Table
+```{r}
+table(subset_ct$PlotIdent, subset_ct$chemo_group)
+```
+
+##🔹 Percentage barplot
+```{r}
+comp_df <- subset_ct@meta.data %>%
+  filter(!is.na(PlotIdent), !is.na(chemo_group)) %>%
+  group_by(chemo_group, PlotIdent) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(chemo_group) %>%
+  mutate(freq = n / sum(n))
+
+ggplot(comp_df, aes(x = chemo_group, y = freq, fill = PlotIdent)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Chemotherapy group",
+    y = "Proportion of epithelial cells",
+    title = "Epithelial subtype composition by chemo response"
+  ) +
+  theme_bw()
+```
+
+##7️⃣  Save
+
+```{r}
+saveRDS(
+  subset_ct,
+  file = "CancerEpithelial_Subclustered.rds"
+)
+```
+
+
+
+# sessionInfo()
+
+```{r}
+sessionInfo()
+```
+

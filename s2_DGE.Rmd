@@ -1,0 +1,158 @@
+---
+title: "s2-Chemo_DGE"
+author: "Zinab Doha"
+date: "01/01/20265"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center', out.width = "90%", fig.asp = 0.52)
+```
+
+## Differential Expression – Cancer Epithelial cells
+
+## Analysis design
+
+2 (Differential Expression – Cancer Epithelial cells):
+
+FindMarkers(Chemo_TNBC vs Chemo_non_TNBC) within assigned celltype_major
+
+Volcano plot
+
+Top/Bottom gene sets (Top=up in TNBC; Bottom=up in non-TNBC)
+
+DotPlot (top DE genes)
+
+GO dotplot + cnetplot + heatplot (if packages installed)
+
+Saved CSV: StudentX_<Celltype>_FindMarkers.csv
+
+
+
+## Load libraries
+```{r}
+
+
+#BiocManager::install(c("clusterProfiler","org.Hs.eg.db","enrichplot","AnnotationDbi"))
+
+library(Seurat)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(clusterProfiler)
+library(enrichplot)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+
+```
+
+# Load data
+
+```{r}
+wu_chemo <- readRDS("wu_chemo.rds")
+```
+
+## Set seed
+
+```{r}
+set.seed(4)
+```
+# FindMarkers(Chemo_TNBC vs Chemo_non_TNBC)
+```{r}
+cells_use <- rownames(wu_chemo@meta.data)[
+  wu_chemo$celltype_major == "Cancer Epithelial"
+]
+
+subset_ct <- subset(wu_chemo, cells = cells_use)
+Idents(subset_ct) <- "chemo_group"
+
+deg <- FindMarkers(
+  subset_ct,
+  ident.1 = "Chemo_TNBC",
+  ident.2 = "Chemo_non_TNBC",
+  test.use = "wilcox",
+  min.pct = 0.1,
+  logfc.threshold = 0
+) %>% rownames_to_column("gene")
+
+write.csv(deg, "Student2_CancerEpithelial_FindMarkers.csv", row.names = FALSE)
+```
+
+# Volcano plot
+```{r}
+# Columns
+logfc_col <- if ("avg_log2FC" %in% colnames(deg)) "avg_log2FC" else "avg_logFC"
+padj_col  <- if ("p_val_adj" %in% colnames(deg)) "p_val_adj" else "p_val"
+
+deg <- deg %>%
+  mutate(logFC = .data[[logfc_col]],
+         padj = .data[[padj_col]],
+         neglogP = -log10(padj + 1e-300))
+
+# Volcano
+ggplot(deg, aes(logFC, neglogP)) +
+  geom_point(alpha = 0.6) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted") +
+  ggtitle("Cancer epithelial: TNBC vs non-TNBC")
+
+# Gene sets
+top_genes    <- deg %>% filter(logFC > 0.25, padj < 0.05) %>% pull(gene)
+bottom_genes <- deg %>% filter(logFC < -0.25, padj < 0.05) %>% pull(gene)
+
+# DotPlot (top 10 each direction)
+features <- unique(c(
+  head(top_genes, 10),
+  head(bottom_genes, 10)
+))
+DotPlot(subset_ct, features = features, group.by = "chemo_group") +
+  RotatedAxis() +
+  ggtitle("Cancer epithelial – top markers")
+
+# SYMBOL → ENTREZ
+symbol_to_entrez <- function(genes) {
+  AnnotationDbi::select(
+    org.Hs.eg.db,
+    keys = genes,
+    keytype = "SYMBOL",
+    columns = "ENTREZID"
+  ) %>% distinct(SYMBOL, .keep_all = TRUE)
+}
+
+fc_vec <- deg$logFC
+names(fc_vec) <- deg$gene
+
+# GO enrichment + plots
+run_GO <- function(genes, label) {
+  if (length(genes) < 5) return(NULL)
+  eg <- symbol_to_entrez(genes)$ENTREZID
+  ego <- enrichGO(eg, OrgDb = org.Hs.eg.db, keyType = "ENTREZID",
+                  ont = "BP", pAdjustMethod = "BH", readable = TRUE)
+  if (nrow(ego@result) > 0) {
+    print(dotplot(ego) + ggtitle(paste(celltype, label)))
+    print(cnetplot(ego, showCategory = 5))
+    print(heatplot(ego, foldChange = fc_vec, showCategory = 5))
+  }
+}
+
+run_GO(top_genes, "Top (Up in TNBC)")
+run_GO(bottom_genes, "Bottom (Up in non-TNBC)")
+```
+
+
+
+
+
+# sessionInfo()
+
+```{r}
+sessionInfo()
+```
+

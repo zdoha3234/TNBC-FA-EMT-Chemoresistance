@@ -1,0 +1,130 @@
+---
+title: "s1-Chemo processing"
+author: "Zinab Doha"
+date: "01/01/2026"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center', out.width = "90%", fig.asp = 0.52)
+```
+
+## UMAP + Composition + QC
+
+## Analysis design
+
+(Figures + QC/Supplement):
+
+- UMAP by celltype_major
+
+- UMAP by chemo_group
+
+- UMAP group.by="celltype_major" and split.by="chemo_group"
+
+- Stacked barplot of celltype_major composition by chemo group
+
+- QC tables: cells per celltype, counts per group×celltype (optional CSV)
+
+
+
+## Load libraries
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+```
+
+## Set seed
+
+```{r}
+set.seed(4)
+```
+
+
+
+# Load data
+
+```{r}
+wu_chemo <- readRDS("wu_chemo.rds")
+```
+
+
+# UMAP: celltype_major
+
+```{r}
+
+p1 <- DimPlot(
+  wu_chemo,
+  reduction = "umap",
+  group.by  = "celltype_major",
+  label     = TRUE,
+  repel     = TRUE,
+  pt.size   = 0.25
+) + ggtitle("UMAP by Celltype Major")
+print(p1)
+```
+
+# UMAP: chemo_group
+```{r}
+p2 <- DimPlot(
+  wu_chemo,
+  reduction = "umap",
+  group.by  = "chemo_group",
+  pt.size   = 0.25
+) + ggtitle("UMAP by Chemotherapy Group")
+print(p2)
+```
+# UMAP: celltype_major split by chemo_group
+
+```{r}
+p3 <- DimPlot(
+  wu_chemo,
+  reduction = "umap",
+  group.by  = "celltype_major",
+  split.by  = "chemo_group",
+  pt.size   = 0.25
+) + ggtitle("UMAP: Celltype split by Chemo Group")
+print(p3)
+```
+
+
+# Composition: stacked barplot
+
+```{r}
+comp_df <- wu_chemo@meta.data %>%
+  group_by(chemo_group, celltype_major) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(chemo_group) %>%
+  mutate(freq = n / sum(n))
+
+p_stack <- ggplot(comp_df, aes(x = chemo_group, y = freq, fill = celltype_major)) +
+  geom_col() +
+  ylab("Proportion of Cells") +
+  ggtitle("Celltype Composition by Chemotherapy Group") +
+  theme_bw()
+print(p_stack)
+```
+
+# QC tables (Supplement)
+```{r}
+qc_celltype <- as.data.frame(table(wu_chemo$celltype_major))
+qc_group_celltype <- comp_df %>% select(chemo_group, celltype_major, n)
+
+write.csv(qc_celltype, "QC_cells_per_celltype.csv", row.names = FALSE)
+write.csv(qc_group_celltype, "QC_counts_per_group_celltype.csv", row.names = FALSE)
+
+```
+
+
+# sessionInfo()
+
+```{r}
+sessionInfo()
+```
+

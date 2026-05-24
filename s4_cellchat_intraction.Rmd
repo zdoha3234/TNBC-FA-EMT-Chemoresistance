@@ -1,0 +1,792 @@
+---
+title: "s4-Chemo_CELLCHAT_INTRACTION"
+author: "Zinab Doha"
+date: "01/01/20265"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center', out.width = "90%", fig.asp = 0.52)
+```
+
+
+
+
+
+## Load libraries
+
+
+```{r}
+
+
+#BiocManager::install(c("clusterProfiler","org.Hs.eg.db","enrichplot","AnnotationDbi"))
+
+library(Seurat)
+library(CellChat)
+library(patchwork)
+library(ggplot2)
+library(dplyr)
+library(future)
+
+# # IMPORTANT: CellChat is unstable with multisession on Windows
+# plan(sequential)
+# 
+# options(future.globals.maxSize = 20 * 1024^3)
+# 
+# # Clean memory
+# gc()
+
+
+```
+
+# Load data
+
+```{r}
+epi   <- readRDS("data/CancerEpithelial_Subclustered.rds")
+fib   <- readRDS("data/Fibroblast_Subclustered.rds")
+tcell <- readRDS("data/T-cells_Subclustered.rds")
+myelo <- readRDS("data/Myeloid_Subclustered.rds")
+
+```
+
+## Set seed
+
+```{r}
+set.seed(4)
+```
+# Harmonize metadata and cell type labels
+
+We create one unified cell-type label used by CellChat.
+PlotIdent, TcellPlotIdent, MyeloPlotIdent
+```{r}
+epi$CellChatType   <- paste0("epi_", epi$PlotIdent)
+fib$CellChatType   <- paste0("fib_", fib$FibroSubtype)
+tcell$CellChatType <- paste0("T_", tcell$TcellPlotIdent)
+myelo$CellChatType <- paste0("myelo_", myelo$MyeloidSubtype)
+```
+
+#Merge all lineages into one Seurat object
+
+
+```{r}
+combined <- merge(
+  epi,
+  y = list(fib, tcell, myelo),
+  add.cell.ids = c("epi", "fib", "T", "myelo")
+)
+```
+
+```{r}
+# Sanity check
+table(combined$CellChatType)
+table(combined$chemo_group)
+
+```
+
+##Split data into NR vs R
+```{r}
+obj_R <- subset(combined, subset = chemo_group == "Chemo_TNBC")      # R
+obj_S  <- subset(combined, subset = chemo_group == "Chemo_non_TNBC")  # S
+
+```
+
+
+```{r}
+library(CellChat)
+
+cellchat_R <- createCellChat(
+  object = GetAssayData(
+    obj_R,
+    assay = "RNA",
+    layer = "data"   # <-- THIS is the key fix
+  ),
+  meta = obj_R@meta.data,
+  group.by = "CellChatType"
+)
+
+cellchat_S <- createCellChat(
+  object = GetAssayData(
+    obj_S,
+    assay = "RNA",
+    layer = "data"
+  ),
+  meta = obj_S@meta.data,
+  group.by = "CellChatType"
+)
+##CHEACK
+cellchat_R
+cellchat_S
+
+```
+
+```{r}
+# CellChat group labels actually used
+levels(cellchat_R@idents)
+levels(cellchat_S@idents)
+
+rownames(cellchat_R@net$weight)
+colnames(cellchat_R@net$weight)
+```
+
+```{r}
+cellchat_R@DB <- CellChatDB.human
+cellchat_S@DB  <- CellChatDB.human
+
+cellchat_R <- subsetData(cellchat_R)
+cellchat_S  <- subsetData(cellchat_S)
+
+cellchat_R <- identifyOverExpressedGenes(cellchat_R)
+cellchat_S  <- identifyOverExpressedGenes(cellchat_S)
+
+cellchat_R <- identifyOverExpressedInteractions(cellchat_R)
+cellchat_S  <- identifyOverExpressedInteractions(cellchat_S) 
+
+cellchat_R <- computeCommunProb(cellchat_R)
+cellchat_S  <- computeCommunProb(cellchat_S)
+
+cellchat_R <- computeCommunProbPathway(cellchat_R)
+cellchat_S  <- computeCommunProbPathway(cellchat_S)
+
+cellchat_R <- aggregateNet(cellchat_R)
+cellchat_S  <- aggregateNet(cellchat_S)
+
+```
+
+
+
+```{r}
+# Extract interaction weight matrices
+mat_R <- cellchat_R@net$weight
+mat_S  <- cellchat_S@net$weight
+
+# Make sure ordering is identical
+common_cells <- intersect(rownames(mat_R), rownames(mat_S))
+mat_R <- mat_R[common_cells, common_cells]
+mat_S  <- mat_S[common_cells, common_cells]
+
+# Difference matrix: R − S
+diff_mat <- mat_R - mat_S
+
+
+```
+
+##PANEL A
+Heatmap: R − S interaction differences (ALL cells)
+================================
+```{r}
+
+library(ComplexHeatmap)
+library(circlize)
+
+# Align matrices
+mat_R <- cellchat_R@net$weight
+mat_S  <- cellchat_S@net$weight
+
+common_senders   <- intersect(rownames(mat_NR), rownames(mat_R))
+common_receivers <- intersect(colnames(mat_NR), colnames(mat_R))
+
+mat_NR <- mat_NR[common_senders, common_receivers]
+mat_R  <- mat_R[common_senders, common_receivers]
+
+diff_mat <- mat_NR - mat_R
+
+# Symmetric color scaling
+max_abs <- max(abs(diff_mat))
+
+col_fun <- colorRamp2(
+  c(-max_abs, 0, max_abs),
+  c("#2C7BB6", "white", "#D7191C")  # blue=R, red=NR
+)
+
+ht_A <- Heatmap(
+  diff_mat,
+  name = "NR − R",
+  col = col_fun,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  row_title = "Sender (Ligand)",
+  column_title = "Receiver (Receptor)",
+  right_annotation = rowAnnotation(
+    Total = anno_barplot(rowSums(abs(diff_mat)),
+                         gp = gpar(fill = "grey40"))
+  ),
+  top_annotation = columnAnnotation(
+    Total = anno_barplot(colSums(abs(diff_mat)),
+                         gp = gpar(fill = "grey40"))
+  )
+)
+
+draw(ht_A)
+```
+##Significant signaling pathways in EMT → T cell ranked by information flow (R vs S)
+
+This reproduces panel c in the example figure.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Extract EMT → T cell communication
+df_NR <- subsetCommunication(cellchat_NR)
+df_R  <- subsetCommunication(cellchat_R)
+
+T_targets <- c("T_Naive","T_CD8 Proliferative","T_Treg")
+
+df_NR_T <- df_NR %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% T_targets)
+
+df_R_T <- df_R %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% T_targets)
+
+# Compute pathway information flow
+path_NR <- df_NR_T %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob)) %>%
+  mutate(group = "NR")
+
+path_R <- df_R_T %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob)) %>%
+  mutate(group = "R")
+
+path_compare <- bind_rows(path_NR, path_R)
+
+# Plot
+ggplot(path_compare,
+       aes(x = reorder(pathway_name, info_flow),
+           y = info_flow,
+           fill = group)) +
+  geom_bar(stat="identity", position="dodge") +
+  coord_flip() +
+  scale_fill_manual(values=c(
+    "NR"="#F8766D",
+    "R"="#00BFC4"
+  )) +
+  theme_bw() +
+  labs(
+    x="Signaling pathway",
+    y="Information flow",
+    title="EMT → T cell signaling pathways"
+  )
+```
+
+###rigt and left C
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Extract EMT → T cell communication
+df_NR <- subsetCommunication(cellchat_NR)
+df_R  <- subsetCommunication(cellchat_R)
+
+T_targets <- c("T_Naive", "T_CD8 Proliferative", "T_Treg")
+
+df_NR_T <- df_NR %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% T_targets)
+
+df_R_T <- df_R %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% T_targets)
+
+# Compute pathway information flow
+path_NR <- df_NR_T %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob), .groups = "drop") %>%
+  mutate(group = "NR")
+
+path_R <- df_R_T %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob), .groups = "drop") %>%
+  mutate(group = "R")
+
+# Make R negative so it goes to the LEFT
+path_R <- path_R %>%
+  mutate(info_flow = -info_flow)
+
+# Combine
+path_compare <- bind_rows(path_NR, path_R)
+
+# Order pathways by total absolute signal
+path_order <- path_compare %>%
+  group_by(pathway_name) %>%
+  summarise(total = sum(abs(info_flow)), .groups = "drop") %>%
+  arrange(total) %>%
+  pull(pathway_name)
+
+path_compare$pathway_name <- factor(
+  path_compare$pathway_name,
+  levels = path_order
+)
+
+# Plot
+ggplot(path_compare,
+       aes(x = pathway_name,
+           y = info_flow,
+           fill = group)) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  geom_vline(xintercept = NULL) +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+  scale_fill_manual(values = c(
+    "NR" = "#F8766D",   # salmon
+    "R"  = "#00BFC4"    # teal
+  )) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.title = element_blank()
+  ) +
+  labs(
+    x = NULL,
+    y = "Information flow",
+    title = "EMT → T cell signaling pathways"
+  )
+```
+##remove less than 0.5
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Extract EMT → T cell communication
+df_NR <- subsetCommunication(cellchat_NR)
+df_R  <- subsetCommunication(cellchat_R)
+
+T_targets <- c("T_Naive", "T_CD8 Proliferative", "T_Treg")
+
+df_NR_T <- df_NR %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% T_targets)
+
+df_R_T <- df_R %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% T_targets)
+
+# Compute pathway information flow
+path_NR <- df_NR_T %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob), .groups = "drop") %>%
+  mutate(group = "NR")
+
+path_R <- df_R_T %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob), .groups = "drop") %>%
+  mutate(group = "R")
+
+# Keep only pathways with information flow >= 0.5 in either group
+path_keep <- bind_rows(path_NR, path_R) %>%
+  group_by(pathway_name) %>%
+  summarise(max_flow = max(info_flow), .groups = "drop") %>%
+  filter(max_flow >= 0.5) %>%
+  pull(pathway_name)
+
+path_NR <- path_NR %>% filter(pathway_name %in% path_keep)
+path_R  <- path_R  %>% filter(pathway_name %in% path_keep)
+
+# Make R negative so it goes LEFT
+path_R <- path_R %>%
+  mutate(info_flow = -info_flow)
+
+# Combine
+path_compare <- bind_rows(path_NR, path_R)
+
+# Order pathways by total absolute signal
+path_order <- path_compare %>%
+  group_by(pathway_name) %>%
+  summarise(total = sum(abs(info_flow)), .groups = "drop") %>%
+  arrange(total) %>%
+  pull(pathway_name)
+
+path_compare$pathway_name <- factor(
+  path_compare$pathway_name,
+  levels = path_order
+)
+
+# Plot
+ggplot(path_compare,
+       aes(x = pathway_name,
+           y = info_flow,
+           fill = group)) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+  scale_y_continuous(labels = abs) +
+  scale_fill_manual(values = c(
+    "NR" = "#F8766D",
+    "R"  = "#00BFC4"
+  )) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.title = element_blank()
+  ) +
+  labs(
+    x = NULL,
+    y = "Information flow",
+    title = "EMT → T cell signaling pathways"
+  )
+```
+
+
+##This shows which pathways dominate EMT→T signaling in R vs S.
+Panel C
+EMT → T cell ligand–receptor pairs (NR vs R)
+
+You asked for the y-axis format:
+
+T_CD8 Proliferative (NR)
+T_CD8 Proliferative (R)
+T_Naive (NR)
+T_Naive (R)
+T_Treg (NR)
+T_Treg (R)
+Step 1 — Prepare data
+```{r}
+
+df_NR_T$group <- "NR"
+df_R_T$group  <- "R"
+
+df_plot <- bind_rows(df_NR_T, df_R_T)
+
+df_plot$target_group <- paste(df_plot$target, "(", df_plot$group, ")")
+
+#Step 2 — Select strongest interactions
+top_pairs <- df_plot %>%
+  group_by(interaction_name) %>%
+  summarise(score = max(prob)) %>%
+  arrange(desc(score)) %>%
+  slice_head(n=20)
+
+df_plot <- df_plot %>%
+  filter(interaction_name %in% top_pairs$interaction_name)
+#Step 3 — Bubble plot (like panel d)
+ggplot(df_plot,
+       aes(x = target_group,
+           y = interaction_name,
+           size = prob,
+           color = prob)) +
+  geom_point() +
+  scale_color_gradient(
+    low = "#2C7BB6",
+    high = "#D7191C"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle=45, hjust=1),
+    axis.text.y = element_text(size=7)
+  ) +
+  labs(
+    x="T cell subtype",
+    y="Ligand–Receptor pair",
+    title="EMT epithelial → T cell interactions"
+  )
+```
+
+
+##EMT → MYELOID PATHWAY BARPLOT
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Extract EMT → Myeloid communication
+df_NR <- subsetCommunication(cellchat_NR)
+df_R  <- subsetCommunication(cellchat_R)
+
+myelo_targets <- c("myelo_cDC1", "myelo_MDSCs", "myelo_TAMs")
+
+df_NR_M <- df_NR %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% myelo_targets)
+
+df_R_M <- df_R %>%
+  filter(source == "epi_Prolif_EMT",
+         target %in% myelo_targets)
+
+# Compute pathway information flow
+path_NR <- df_NR_M %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob), .groups = "drop") %>%
+  mutate(group = "NR")
+
+path_R <- df_R_M %>%
+  group_by(pathway_name) %>%
+  summarise(info_flow = sum(prob), .groups = "drop") %>%
+  mutate(group = "R")
+
+# Keep only pathways with information flow >= 0.5 in either group
+path_keep <- bind_rows(path_NR, path_R) %>%
+  group_by(pathway_name) %>%
+  summarise(max_flow = max(info_flow), .groups = "drop") %>%
+  filter(max_flow >= 0.5) %>%
+  pull(pathway_name)
+
+path_NR <- path_NR %>% filter(pathway_name %in% path_keep)
+path_R  <- path_R  %>% filter(pathway_name %in% path_keep)
+
+# Make R negative so it goes LEFT
+path_R <- path_R %>%
+  mutate(info_flow = -info_flow)
+
+# Combine
+path_compare <- bind_rows(path_NR, path_R)
+
+# Order pathways by total absolute signal
+path_order <- path_compare %>%
+  group_by(pathway_name) %>%
+  summarise(total = sum(abs(info_flow)), .groups = "drop") %>%
+  arrange(total) %>%
+  pull(pathway_name)
+
+path_compare$pathway_name <- factor(
+  path_compare$pathway_name,
+  levels = path_order
+)
+
+# Plot
+ggplot(path_compare,
+       aes(x = pathway_name,
+           y = info_flow,
+           fill = group)) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
+  scale_y_continuous(labels = abs) +
+  scale_fill_manual(values = c(
+    "NR" = "#F8766D",
+    "R"  = "#00BFC4"
+  )) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.y = element_text(size = 11),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.title = element_blank()
+  ) +
+  labs(
+    x = NULL,
+    y = "Information flow",
+    title = "EMT → Myeloid signaling pathways"
+  )
+
+```
+
+##EMT → MYELOID BUBBLE PLOT
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Add group labels
+df_NR_M$group <- "NR"
+df_R_M$group  <- "R"
+
+# Combine
+df_plot <- bind_rows(df_NR_M, df_R_M)
+
+# Create x-axis labels
+df_plot$target_group <- paste(df_plot$target, "(", df_plot$group, ")")
+
+# Select strongest interactions (top 20)
+top_pairs <- df_plot %>%
+  group_by(interaction_name) %>%
+  summarise(score = max(prob), .groups = "drop") %>%
+  arrange(desc(score)) %>%
+  slice_head(n = 20)
+
+df_plot <- df_plot %>%
+  filter(interaction_name %in% top_pairs$interaction_name)
+
+# Optional: order x-axis manually
+df_plot$target_group <- factor(
+  df_plot$target_group,
+  levels = c(
+    "myelo_cDC1 ( NR )", "myelo_cDC1 ( R )",
+    "myelo_MDSCs ( NR )", "myelo_MDSCs ( R )",
+    "myelo_TAMs ( NR )", "myelo_TAMs ( R )"
+  )
+)
+
+# Bubble plot
+ggplot(df_plot,
+       aes(x = target_group,
+           y = interaction_name,
+           size = prob,
+           color = prob)) +
+  geom_point() +
+  scale_color_gradient(
+    low = "#2C7BB6",
+    high = "#D7191C"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  ) +
+  labs(
+    x = "Myeloid subtype",
+    y = "Ligand–Receptor pair",
+    title = "EMT epithelial → Myeloid interactions"
+  )
+```
+
+
+
+##only epi a sender
+```{r}
+epi_senders <- grep("^epi_", levels(cellchat_NR@idents), value = TRUE)
+epi_senders
+
+
+mat_NR <- cellchat_NR@net$weight
+
+# Keep epithelial senders (rows), all receivers (columns)
+mat_NR_epi <- mat_NR[epi_senders, , drop = FALSE]
+
+dim(mat_NR_epi)
+
+
+```
+##plot
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+col_fun_NR <- colorRamp2(
+  c(0, max(mat_NR_epi)),
+  c("white", "#D7191C")   # stronger = red
+)
+
+ht_NR_epi <- Heatmap(
+  mat_NR_epi,
+  name = "NR interaction\nstrength",
+  col = col_fun_NR,
+
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+
+  row_title = "Epithelial sender programs",
+  column_title = "Receiver (TME cell types)",
+
+  row_names_gp = gpar(fontsize = 11),
+  column_names_gp = gpar(fontsize = 10),
+  row_names_rot = 0,
+  column_names_rot = 45,
+
+  row_names_max_width = unit(6, "cm"),
+  column_names_max_height = unit(6, "cm"),
+
+  right_annotation = rowAnnotation(
+    Total = anno_barplot(
+      rowSums(mat_NR_epi),
+      gp = gpar(fill = "grey40"),
+      border = FALSE
+    )
+  ),
+
+  top_annotation = columnAnnotation(
+    Total = anno_barplot(
+      colSums(mat_NR_epi),
+      gp = gpar(fill = "grey40"),
+      border = FALSE
+    )
+  ),
+
+  heatmap_legend_param = list(
+    title = "Interaction\nstrength"
+  )
+)
+
+
+##save
+pdf(
+  "NR_Epithelial_to_TME_CellChat_heatmap.pdf",
+  width = 10,
+  height = 8,
+  useDingbats = FALSE
+)
+
+draw(ht_NR_epi,
+     heatmap_legend_side = "right",
+     annotation_legend_side = "right")
+
+dev.off()
+
+```
+
+##suplementry
+```{r}
+# ══════════════════════════════════════════════════════════
+# SUPPLEMENTARY TABLES — FA_EMT signaling to T cell & Myeloid
+# ══════════════════════════════════════════════════════════
+
+dir.create("supplementary", showWarnings = FALSE)
+
+# ── 1. TOP PATHWAYS: FA_EMT → T cell ──────────────────────
+supp_path_T <- bind_rows(
+  df_R_T %>% group_by(pathway_name) %>%
+    summarise(info_flow = sum(prob), .groups = "drop") %>%
+    mutate(group = "R"),
+  df_S_T %>% group_by(pathway_name) %>%
+    summarise(info_flow = sum(prob), .groups = "drop") %>%
+    mutate(group = "S")
+) %>%
+  arrange(group, desc(info_flow))
+
+write.csv(supp_path_T,
+          "supplementary/SupplTable_Pathways_FAEMT_Tcell.csv",
+          row.names = FALSE)
+
+# ── 2. TOP L-R INTERACTIONS: FA_EMT → T cell ──────────────
+supp_lr_T <- bind_rows(df_R_T, df_S_T) %>%
+  select(source, target, interaction_name,
+         pathway_name, prob, group) %>%
+  arrange(group, desc(prob))
+
+write.csv(supp_lr_T,
+          "supplementary/SupplTable_LR_FAEMT_Tcell.csv",
+          row.names = FALSE)
+
+# ── 3. TOP PATHWAYS: FA_EMT → Myeloid ─────────────────────
+supp_path_M <- bind_rows(
+  df_R_M %>% group_by(pathway_name) %>%
+    summarise(info_flow = sum(prob), .groups = "drop") %>%
+    mutate(group = "R"),
+  df_S_M %>% group_by(pathway_name) %>%
+    summarise(info_flow = sum(prob), .groups = "drop") %>%
+    mutate(group = "S")
+) %>%
+  arrange(group, desc(info_flow))
+
+write.csv(supp_path_M,
+          "supplementary/SupplTable_Pathways_FAEMT_Myeloid.csv",
+          row.names = FALSE)
+
+# ── 4. TOP L-R INTERACTIONS: FA_EMT → Myeloid ─────────────
+supp_lr_M <- bind_rows(df_R_M, df_S_M) %>%
+  select(source, target, interaction_name,
+         pathway_name, prob, group) %>%
+  arrange(group, desc(prob))
+
+write.csv(supp_lr_M,
+          "supplementary/SupplTable_LR_FAEMT_Myeloid.csv",
+          row.names = FALSE)
+
+message("4 supplementary CSV files saved to supplementary/")
+```
+
+
+# sessionInfo()
+
+```{r}
+sessionInfo()
+```
+

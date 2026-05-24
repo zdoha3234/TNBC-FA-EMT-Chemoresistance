@@ -1,0 +1,541 @@
+---
+title: "S5_BULK_validation"
+output: html_document
+date: "2026-02-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+##Load cleaned datasets
+```{r}
+# ── STEP 1: Update fastmap and RSQLite first ──────────────
+install.packages("fastmap")
+install.packages("RSQLite")
+
+# ── STEP 2: Restart R session ─────────────────────────────
+# In RStudio: Session → Restart R
+# OR run:
+.rs.restartR()
+```
+```{r}
+# ── STEP 1: Check where fastmap is installed ──────────────
+find.package("fastmap")
+.libPaths()  # shows all library paths R is searching
+
+# ── STEP 2: Install fastmap to the correct user library ───
+install.packages("fastmap", 
+                 lib = .libPaths()[1],  # force install to first path
+                 type = "binary")       # binary is faster on Windows
+
+# ── STEP 3: Verify the version in the correct location ────
+packageVersion("fastmap")
+```
+```{r}
+# ── Find and remove old fastmap ───────────────────────────
+# Check all installed versions
+installed.packages()[,"Package"] |> 
+  (\(x) x[x == "fastmap"])()
+
+# Remove from ALL library paths
+remove.packages("fastmap")
+
+# Reinstall fresh
+install.packages("fastmap", type = "binary")
+
+# Restart R completely
+.rs.restartR()
+```
+```{r}
+# ── Verify then load ──────────────────────────────────────
+packageVersion("fastmap")   # must show 1.2.0 or higher
+library(GSVA)
+```
+
+
+
+```{r}
+# install.packages("BiocManager")
+# BiocManager::install("GSVA")
+
+
+
+
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(pheatmap)
+library(GSVA)
+library(msigdbr)
+library(dplyr)
+
+
+ gse58812 <- readRDS("gse58812_clean.rds")
+
+expr <- gse58812$expr
+meta <- gse58812$meta
+
+dim(expr)
+table(meta$response)
+
+
+
+```
+
+
+
+##Get Hallmark Gene Sets
+```{r}
+hallmark <- msigdbr(
+  species = "Homo sapiens",
+  category = "H"
+)
+
+hallmark_list <- hallmark %>%
+  split(x = .$gene_symbol, f = .$gs_name)
+
+
+```
+
+##Select Relevant Signatures
+```{r}
+
+
+selected_sets <- hallmark_list[c(
+   "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION",
+  "HALLMARK_INFLAMMATORY_RESPONSE",
+  "HALLMARK_FATTY_ACID_METABOLISM",
+  "HALLMARK_GLYCOLYSIS",
+  "HALLMARK_OXIDATIVE_PHOSPHORYLATION",
+   "HALLMARK_CHOLESTEROL_HOMEOSTASIS",
+  "HALLMARK_XENOBIOTIC_METABOLISM",
+  "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY",
+  "REACTOME_FATTY_ACID_METABOLISM",
+  "HALLMARK_MTORC1_SIGNALING",
+  "HALLMARK_HYPOXIA",
+  "HALLMARK_APICAL_JUNCTION",
+  "HALLMARK_HEDGEHOG_SIGNALING",
+  "HALLMARK_KRAS_SIGNALING_DN"
+)]
+
+
+#Check overlap:
+
+lapply(selected_sets, function(x) sum(x %in% rownames(expr)))
+```
+
+##run GSVA:
+##Log-transform + Gaussian
+
+This is most common and stable.
+```{r}
+
+
+expr_log <- log2(expr + 1)
+
+gsva_scores <- gsva(
+  expr = as.matrix(expr_log),
+  gset.idx.list = selected_sets,
+  method = "gsva",
+  kcdf = "Gaussian",
+  verbose = FALSE
+)
+
+#head(gsva_scores)
+```
+##add score
+```{r}
+# ----------------------------
+# METABOLIC HALLMARKS
+# ----------------------------
+
+meta$Glycolysis_score <- gsva_scores["HALLMARK_GLYCOLYSIS", ]
+
+meta$CHOL_score <- gsva_scores["HALLMARK_CHOLESTEROL_HOMEOSTASIS", ]
+
+meta$MTORC1_score <- gsva_scores["HALLMARK_MTORC1_SIGNALING", ]
+
+meta$Hypoxia_score <- gsva_scores["HALLMARK_HYPOXIA", ]
+
+
+# ----------------------------
+# PLASTICITY / EMT HALLMARKS
+# ----------------------------
+
+meta$EMT_score <- gsva_scores["HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION", ]
+
+meta$ApicalJunction_score <- gsva_scores["HALLMARK_APICAL_JUNCTION", ]
+
+
+
+meta$Hedgehog_score <- gsva_scores["HALLMARK_HEDGEHOG_SIGNALING", ]
+
+meta$KRAS_DN_score <- gsva_scores["HALLMARK_KRAS_SIGNALING_DN", ]
+
+
+```
+
+##creat combin axies
+```{r}
+# Core Metabolic Axis
+meta$FA_axis <- rowMeans(
+  meta[, c(
+     "HALLMARK_FATTY_ACID_METABOLISM",
+    "Glycolysis_score",
+    "CHOL_score",
+    "MTORC1_score",
+    "Hypoxia_score"
+  )]
+)
+
+# Plasticity / EMT Axis
+meta$EMT_axis <- rowMeans(
+  meta[, c(
+    "EMT_score",
+    "ApicalJunction_score",
+    "Hedgehog_score",
+    "KRAS_DN_score"
+  )]
+)
+
+
+# Core co_express Axis
+meta$FA_EMT_axis <- rowMeans(
+  meta[, c(
+     "HALLMARK_FATTY_ACID_METABOLISM",
+    "Glycolysis_score",
+    "CHOL_score",
+    "MTORC1_score",
+    "Hypoxia_score",
+     "EMT_score",
+    "ApicalJunction_score",
+    "Hedgehog_score",
+    "KRAS_DN_score"
+  )]
+)
+
+```
+
+
+##test resectence
+```{r}
+meta$response <- factor(meta$response,
+                        levels = c("Sensitive","Resistant"))
+
+wilcox.test(FA_axis ~ response, data = meta)
+wilcox.test(EMT_axis ~ response, data = meta)
+
+wilcox.test(FA_EMT_axis ~ response, data = meta)
+
+```
+
+```{r}
+library(tidyr)
+library(ggplot2)
+
+meta_long <- meta %>%
+  select(response, FA_axis, EMT_axis, FA_EMT_axis) %>%
+  pivot_longer(
+    cols = -response,
+    names_to = "Axis",
+    values_to = "Score"
+  )
+
+ggplot(meta_long,
+       aes(x = response,
+           y = Score,
+           fill = response)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.15, alpha = 0.5) +
+  facet_wrap(~Axis, scales = "free_y") +
+  scale_fill_manual(values = c(
+    "Sensitive" = "#00BFC4",
+    "Resistant" = "#F8766D"
+  )) +
+  labs(
+    x = NULL,
+    y = "GSVA Score",
+    title = "Metabolic and Plasticity Axes in Resistant vs Sensitive"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+
+```
+##SAVE
+```{r}
+# ── ASSIGN TO OBJECT FIRST ────────────────────────────────
+p_gsva_box <- ggplot(meta_long,
+       aes(x = response,
+           y = Score,
+           fill = response)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.15, alpha = 0.5) +
+  facet_wrap(~Axis, scales = "free_y") +
+  scale_fill_manual(values = c(
+    "Sensitive" = "#00BFC4",
+    "Resistant" = "#F8766D"
+  )) +
+  labs(
+    x     = NULL,
+    y     = "GSVA Score",
+    title = "Metabolic and Plasticity Axes in Resistant vs Sensitive"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "none",
+    strip.text      = element_text(face = "bold"),
+    plot.title      = element_text(hjust = 0.5, face = "bold")
+  )
+
+# ── SAVE HIGH RESOLUTION PNG ──────────────────────────────
+ggsave(
+  filename = "plots/GSVA_Boxplot_Metabolic_Plasticity.png",
+  plot     = p_gsva_box,
+  width    = 8,
+  height   = 6,
+  dpi      = 600,        # publication quality
+  units    = "in",
+  bg       = "white"     # white background
+)
+
+# ── ALSO SAVE AS PDF (vector — best for manuscript) ───────
+ggsave(
+  filename = "plots/GSVA_Boxplot_Metabolic_Plasticity.pdf",
+  plot     = p_gsva_box,
+  width    = 8,
+  height   = 6,
+  units    = "in"
+)
+
+message("Saved PNG at 600 DPI and PDF to plots/")
+```
+
+
+```{r}
+cor.test(meta$Metabolic_axis, meta$Plasticity_axis)
+
+
+glm(response ~ Metabolic_axis + Plasticity_axis,
+    data = meta,
+    family = binomial)
+
+```
+##survaival
+```{r}
+library(survival)
+library(survminer)
+library(dplyr)
+
+meta_surv <- meta %>%
+  filter(!is.na(surv_time_days),
+         !is.na(surv_event),
+         !is.na(FA_axis),
+         !is.na(EMT_axis),
+         !is.na(FA_EMT_axis))
+
+
+
+
+```
+
+##FA_METABOLIC AXIS
+
+```{r}
+median_met <- median(meta_surv$FA_axis)
+
+meta_surv$FA_group <- ifelse(
+  meta_surv$FA_axis >= median_met,
+  "High_FA_Score", "Low_FA_Score"
+)
+
+meta_surv$FA_group <- factor(
+  meta_surv$FA_group,
+  levels = c("Low_FA_Score","High_FA_Score")
+)
+
+
+
+
+```
+
+
+```{r}
+# ── STEP 1: Install missing package ───────────────────────
+install.packages("litedown")
+
+# ── STEP 2: Restart R session ─────────────────────────────
+.rs.restartR()
+```
+
+
+```{r}
+fit_met <- survfit(
+  Surv(surv_time_days, surv_event) ~ FA_group,
+  data = meta_surv
+)
+
+ggsurvplot(
+  fit_met,
+  data = meta_surv,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = TRUE,
+  palette = c("#00BFC4","#F8766D"),
+  xlab = "Time (days)",
+  ylab = "Survival probability",
+  title = "Survival by FA Metabolic Axis",
+  legend.title = "FA Metabolic Axis"
+)
+
+```
+```{r}
+cox_met <- coxph(
+  Surv(surv_time_days, surv_event) ~ Metabolic_axis,
+  data = meta_surv
+)
+
+summary(cox_met)
+
+```
+
+
+##PLASTICITY AXIS
+```{r}
+median_plast <- median(meta_surv$Plasticity_axis)
+
+meta_surv$Plasticity_group <- ifelse(
+  meta_surv$Plasticity_axis >= median_plast,
+  "High_Plasticity", "Low_Plasticity"
+)
+
+meta_surv$Plasticity_group <- factor(
+  meta_surv$Plasticity_group,
+  levels = c("Low_Plasticity","High_Plasticity")
+)
+
+
+
+```
+
+##Kaplan–Meier
+```{r}
+
+
+fit_plast <- survfit(
+  Surv(surv_time_days, surv_event) ~ Plasticity_group,
+  data = meta_surv
+)
+
+ggsurvplot(
+  fit_plast,
+  data = meta_surv,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = TRUE,
+  palette = c("#00BFC4","#F8766D"),
+  xlab = "Time (days)",
+  ylab = "Survival probability",
+  title = "Survival by Plasticity Axis",
+  legend.title = "Plasticity Axis"
+)
+
+
+
+```
+
+```{r}
+cox_plast <- coxph(
+  Surv(surv_time_days, surv_event) ~ Plasticity_axis,
+  data = meta_surv
+)
+
+summary(cox_plast)
+
+```
+
+```{r}
+cox_both <- coxph(
+  Surv(surv_time_days, surv_event) ~ Metabolic_axis + Plasticity_axis,
+  data = meta_surv
+)
+
+summary(cox_both)
+
+```
+##Forest Plot of Cox Model (Clean Visualization)-metabolic
+
+```{r}
+library(survminer)
+
+ggforest(cox_both, data = meta_surv)
+
+```
+
+#Predict Risk Score from Cox Model/Visualize Risk Distribution
+
+The Cox model estimates a linear predictor:This shows if high-risk patients overlap with events.
+
+```{r}
+meta_surv$Risk_score <- predict(cox_both, type = "lp")
+
+
+ggplot(meta_surv, aes(x = Risk_score, fill = factor(surv_event))) +
+  geom_density(alpha = 0.4) +
+  theme_classic() +
+  labs(fill = "Event")
+
+```
+
+
+##Stratify Into High vs Low Risk/ Kaplan–Meier by Predicted Risk
+
+Median split (simple and standard):
+```{r}
+median_risk <- median(meta_surv$Risk_score)
+
+meta_surv$Risk_group <- ifelse(
+  meta_surv$Risk_score >= median_risk,
+  "High_Risk", "Low_Risk"
+)
+
+meta_surv$Risk_group <- factor(meta_surv$Risk_group,
+                                levels = c("Low_Risk","High_Risk"))
+
+
+##Kaplan–Meier by Predicted Risk
+fit_risk <- survfit(
+  Surv(surv_time_days, surv_event) ~ Risk_group,
+  data = meta_surv
+)
+
+ggsurvplot(
+  fit_risk,
+  data = meta_surv,
+  pval = TRUE,
+  risk.table = TRUE,
+  conf.int = TRUE,
+  palette = c("#00BFC4","#F8766D"),
+  title = "Survival by Predicted Risk (Cox Model)"
+)
+
+
+```
+##Time-Dependent ROC (Model Performance)
+```{r}
+install.packages("timeROC")
+library(timeROC)
+
+```
+
+
+
+
+
